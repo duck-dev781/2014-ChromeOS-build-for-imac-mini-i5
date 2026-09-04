@@ -1,0 +1,303 @@
+name: Build ChromeOS Rammus for 2014 Mac mini
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -eux
+
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/local/lib/node_modules
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
+
+          sudo docker system prune -af || true
+
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo rm -rf /tmp/*
+          sudo rm -rf /var/tmp/*
+
+          df -h
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -eux
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            wget \
+            curl \
+            unzip \
+            tar \
+            xz-utils \
+            cgpt \
+            util-linux \
+            coreutils \
+            file \
+            rsync \
+            dosfstools \
+            e2fsprogs \
+            parted \
+            gdisk \
+            qemu-utils
+
+      - name: Download ChromeOS Rammus recovery
+        shell: bash
+        run: |
+          set -eux
+
+          mkdir -p recovery
+          cd recovery
+
+          wget -O rammus.zip \
+            "https://dl.google.com/dl/edgedl/chromeos/recovery/chromeos_14092.77.0_rammus_recovery_stable-channel_mp-v2.bin.zip"
+
+          unzip -o rammus.zip
+
+          ls -lh
+
+      - name: Download Brunch r93
+        shell: bash
+        run: |
+          set -eux
+
+          wget -O brunch.tar.gz \
+            "https://github.com/sebanc/brunch/releases/download/r93-stable-20211002/brunch_r93_stable_20211002.tar.gz"
+
+          mkdir -p brunch
+          tar -xzf brunch.tar.gz -C brunch
+
+          find brunch -maxdepth 2 -type f -print
+
+      - name: Locate recovery image
+        shell: bash
+        run: |
+          set -eux
+
+          RECOVERY="$(find recovery -type f \( -name '*.bin' -o -name '*.img' \) | head -n 1)"
+
+          if [ -z "$RECOVERY" ]; then
+            echo "ERROR: ChromeOS recovery image was not found."
+            exit 1
+          fi
+
+          echo "Recovery image:"
+          echo "$RECOVERY"
+
+          cp "$RECOVERY" chromeos_recovery.bin
+
+          ls -lh chromeos_recovery.bin
+
+      - name: Locate Brunch installer
+        shell: bash
+        run: |
+          set -eux
+
+          INSTALLER="$(find brunch -type f -name 'chromeos-install.sh' | head -n 1)"
+
+          if [ -z "$INSTALLER" ]; then
+            echo "ERROR: chromeos-install.sh was not found in Brunch."
+            find brunch -type f -maxdepth 4 -print
+            exit 1
+          fi
+
+          echo "Brunch installer:"
+          echo "$INSTALLER"
+
+          cp "$INSTALLER" ./chromeos-install.sh
+          chmod +x ./chromeos-install.sh
+
+          ls -lh ./chromeos-install.sh
+
+      - name: Check free space before build
+        shell: bash
+        run: |
+          set -eux
+
+          AVAILABLE_KB="$(df --output=avail / | tail -n 1 | tr -d ' ')"
+
+          if [ "$AVAILABLE_KB" -lt 12582912 ]; then
+            echo "ERROR: Less than 12 GB of free space is available."
+            df -h
+            exit 1
+          fi
+
+          df -h
+
+      - name: Build ChromeOS Rammus image
+        shell: bash
+        run: |
+          set -eux
+
+          rm -f chromeos-rammus-macmini2014.img
+
+          sudo bash ./chromeos-install.sh \
+            -src chromeos_recovery.bin \
+            -dst chromeos-rammus-macmini2014.img \
+            -s 14092.77.0
+
+      - name: Verify generated image
+        shell: bash
+        run: |
+          set -eux
+
+          if [ ! -f chromeos-rammus-macmini2014.img ]; then
+            echo "ERROR: ChromeOS image was not created."
+            exit 1
+          fi
+
+          ls -lh chromeos-rammus-macmini2014.img
+
+          file chromeos-rammus-macmini2014.img
+
+      - name: Create BIN image
+        shell: bash
+        run: |
+          set -eux
+
+          cp \
+            chromeos-rammus-macmini2014.img \
+            chromeos-rammus-macmini2014.bin
+
+          ls -lh chromeos-rammus-macmini2014.bin
+
+      - name: Create SHA256 checksum
+        shell: bash
+        run: |
+          set -eux
+
+          sha256sum \
+            chromeos-rammus-macmini2014.bin \
+            > chromeos-rammus-macmini2014.sha256
+
+          cat chromeos-rammus-macmini2014.sha256
+
+      - name: Create build information
+        shell: bash
+        run: |
+          cat > BUILD_INFO.txt <<'EOF'
+ChromeOS Rammus Build
+=====================
+
+Target:
+2014 Apple Mac mini
+
+Hardware:
+Intel Haswell-era Mac mini
+Silver aluminum enclosure
+
+ChromeOS:
+ChromeOS 93.0.4577.107
+
+ChromeOS platform:
+14092.77.0
+
+Recovery board:
+rammus
+
+Brunch:
+r93 stable 20211002
+
+Image:
+chromeos-rammus-macmini2014.bin
+
+Build method:
+GitHub Actions
+
+Purpose:
+ChromeOS/Brunch boot testing on a 2014 Mac mini.
+
+IMPORTANT:
+This is a legacy ChromeOS 93 build. ChromeOS 93 is obsolete and
+should not be considered a secure modern daily-driver operating system.
+EOF
+
+          cat BUILD_INFO.txt
+
+      - name: Create debug report
+        shell: bash
+        run: |
+          set -eux
+
+          {
+            echo "ChromeOS Rammus 2014 Mac mini Debug Report"
+            echo "=========================================="
+            echo
+            echo "Recovery:"
+            file chromeos_recovery.bin || true
+            ls -lh chromeos_recovery.bin
+            echo
+            echo "Generated image:"
+            ls -lh chromeos-rammus-macmini2014.img
+            file chromeos-rammus-macmini2014.img
+            echo
+            echo "BIN image:"
+            ls -lh chromeos-rammus-macmini2014.bin
+            echo
+            echo "Partition information:"
+            sudo fdisk -l chromeos-rammus-macmini2014.img || true
+            echo
+            echo "GPT information:"
+            sudo gdisk -l chromeos-rammus-macmini2014.img || true
+            echo
+            echo "SHA256:"
+            cat chromeos-rammus-macmini2014.sha256
+          } > DEBUG_REPORT.txt
+
+          cat DEBUG_REPORT.txt
+
+      - name: Create ZIP package
+        shell: bash
+        run: |
+          set -eux
+
+          mkdir -p output
+
+          cp chromeos-rammus-macmini2014.bin output/
+          cp chromeos-rammus-macmini2014.sha256 output/
+          cp BUILD_INFO.txt output/
+          cp DEBUG_REPORT.txt output/
+
+          cd output
+
+          zip -9 \
+            ../chromeos-rammus-macmini2014.zip \
+            chromeos-rammus-macmini2014.bin \
+            chromeos-rammus-macmini2014.sha256 \
+            BUILD_INFO.txt \
+            DEBUG_REPORT.txt
+
+          cd ..
+
+          ls -lh chromeos-rammus-macmini2014.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromeos-rammus-macmini2014
+          path: |
+            chromeos-rammus-macmini2014.zip
+            output/chromeos-rammus-macmini2014.bin
+            output/chromeos-rammus-macmini2014.sha256
+            output/BUILD_INFO.txt
+            output/DEBUG_REPORT.txt
+          if-no-files-found: error
