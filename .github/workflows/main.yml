@@ -28,22 +28,31 @@ jobs:
           sudo rm -rf /opt/hostedtoolcache
 
           sudo docker system prune -af || true
-          sudo apt-get clean
 
+          sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
           sudo rm -rf /tmp/*
           sudo rm -rf /var/tmp/*
 
           df -h
 
-      - name: Install dependencies
+      - name: Enable Universe repository
         shell: bash
         run: |
           set -eux
 
+          sudo add-apt-repository universe
+
           sudo apt-get update
 
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -eux
+
           sudo apt-get install -y \
+            pv \
+            cgpt \
             wget \
             curl \
             unzip \
@@ -60,6 +69,27 @@ jobs:
             qemu-utils \
             zip
 
+      - name: Verify cgpt
+        shell: bash
+        run: |
+          set -eux
+
+          echo "Checking cgpt..."
+
+          command -v cgpt
+
+          cgpt --help || true
+
+          echo "cgpt is installed successfully."
+
+      - name: Verify pv
+        shell: bash
+        run: |
+          set -eux
+
+          command -v pv
+          pv --version
+
       - name: Download ChromeOS Rammus recovery
         shell: bash
         run: |
@@ -68,11 +98,14 @@ jobs:
           mkdir -p recovery
           cd recovery
 
-          wget -O rammus.zip "https://dl.google.com/dl/edgedl/chromeos/recovery/chromeos_14092.77.0_rammus_recovery_stable-channel_mp-v2.bin.zip"
+          wget -O rammus.zip \
+            "https://dl.google.com/dl/edgedl/chromeos/recovery/chromeos_14092.77.0_rammus_recovery_stable-channel_mp-v2.bin.zip"
 
           unzip -o rammus.zip
 
-          find . -type f -maxdepth 2 -print
+          echo "Recovery files:"
+          find . -maxdepth 2 -type f -print
+
           ls -lh
 
       - name: Download Brunch r93
@@ -80,12 +113,15 @@ jobs:
         run: |
           set -eux
 
-          wget -O brunch.tar.gz "https://github.com/sebanc/brunch/releases/download/r93-stable-20211002/brunch_r93_stable_20211002.tar.gz"
+          wget -O brunch.tar.gz \
+            "https://github.com/sebanc/brunch/releases/download/r93-stable-20211002/brunch_r93_stable_20211002.tar.gz"
 
           mkdir -p brunch
+
           tar -xzf brunch.tar.gz -C brunch
 
-          find brunch -type f -maxdepth 4 -print
+          echo "Brunch files:"
+          find brunch -maxdepth 4 -type f -print
 
       - name: Prepare recovery image
         shell: bash
@@ -95,7 +131,7 @@ jobs:
           RECOVERY="$(find recovery -type f \( -name '*.bin' -o -name '*.img' \) | head -n 1)"
 
           if [ -z "$RECOVERY" ]; then
-            echo "ERROR: Recovery image was not found."
+            echo "ERROR: ChromeOS recovery image was not found."
             exit 1
           fi
 
@@ -105,6 +141,7 @@ jobs:
           cp "$RECOVERY" chromeos_recovery.bin
 
           ls -lh chromeos_recovery.bin
+
           file chromeos_recovery.bin
 
       - name: Prepare Brunch installer
@@ -123,9 +160,33 @@ jobs:
           echo "$INSTALLER"
 
           cp "$INSTALLER" chromeos-install.sh
+
           chmod +x chromeos-install.sh
 
           ls -lh chromeos-install.sh
+
+      - name: Verify Brunch dependencies
+        shell: bash
+        run: |
+          set -eux
+
+          echo "Checking required commands..."
+
+          command -v cgpt
+          command -v pv
+          command -v tar
+          command -v unzip
+
+          echo
+          echo "cgpt:"
+          cgpt --help || true
+
+          echo
+          echo "pv:"
+          pv --version
+
+          echo
+          echo "All required Brunch dependencies are available."
 
       - name: Check disk space
         shell: bash
@@ -142,45 +203,72 @@ jobs:
             exit 1
           fi
 
+          df -h
+
       - name: Build ChromeOS Rammus
         shell: bash
         run: |
           set -eux
 
+          echo "Starting Brunch installer..."
+
+          echo
+          echo "cgpt location:"
+          command -v cgpt
+
+          echo
+          echo "cgpt version/help:"
+          cgpt --help || true
+
+          echo
+          echo "Brunch installer:"
+          ls -lh chromeos-install.sh
+
+          echo
+          echo "Recovery image:"
+          ls -lh chromeos_recovery.bin
+
           rm -f chromeos-rammus-macmini2014.img
 
-          sudo bash chromeos-install.sh \
+          sudo env "PATH=$PATH" bash chromeos-install.sh \
             -src chromeos_recovery.bin \
             -dst chromeos-rammus-macmini2014.img
 
-      - name: Verify image
+      - name: Verify generated image
         shell: bash
         run: |
           set -eux
 
           if [ ! -f chromeos-rammus-macmini2014.img ]; then
-            echo "ERROR: Image was not created."
+            echo "ERROR: ChromeOS image was not created."
             exit 1
           fi
 
+          echo "ChromeOS image created successfully."
+
           ls -lh chromeos-rammus-macmini2014.img
+
           file chromeos-rammus-macmini2014.img
 
-      - name: Create BIN
+      - name: Create BIN image
         shell: bash
         run: |
           set -eux
 
-          cp chromeos-rammus-macmini2014.img chromeos-rammus-macmini2014.bin
+          cp \
+            chromeos-rammus-macmini2014.img \
+            chromeos-rammus-macmini2014.bin
 
           ls -lh chromeos-rammus-macmini2014.bin
 
-      - name: Create checksum
+      - name: Create SHA256 checksum
         shell: bash
         run: |
           set -eux
 
-          sha256sum chromeos-rammus-macmini2014.bin > chromeos-rammus-macmini2014.sha256
+          sha256sum \
+            chromeos-rammus-macmini2014.bin \
+            > chromeos-rammus-macmini2014.sha256
 
           cat chromeos-rammus-macmini2014.sha256
 
@@ -202,6 +290,8 @@ jobs:
             '' \
             'Image: chromeos-rammus-macmini2014.bin' \
             '' \
+            'Build method: GitHub Actions' \
+            '' \
             'This is a legacy ChromeOS build for testing.' \
             'ChromeOS 93 is obsolete and should not be used as a secure modern daily driver.' \
             > BUILD_INFO.txt
@@ -216,6 +306,14 @@ jobs:
           {
             echo "ChromeOS Rammus 2014 Mac mini Debug Report"
             echo "=========================================="
+            echo
+            echo "cgpt:"
+            command -v cgpt
+            cgpt --help || true
+            echo
+            echo "pv:"
+            command -v pv
+            pv --version
             echo
             echo "Recovery image:"
             ls -lh chromeos_recovery.bin
@@ -240,7 +338,7 @@ jobs:
 
           cat DEBUG_REPORT.txt
 
-      - name: Create ZIP
+      - name: Create ZIP package
         shell: bash
         run: |
           set -eux
@@ -254,7 +352,8 @@ jobs:
 
           cd output
 
-          zip -9 ../chromeos-rammus-macmini2014.zip \
+          zip -9 \
+            ../chromeos-rammus-macmini2014.zip \
             chromeos-rammus-macmini2014.bin \
             chromeos-rammus-macmini2014.sha256 \
             BUILD_INFO.txt \
@@ -264,7 +363,7 @@ jobs:
 
           ls -lh chromeos-rammus-macmini2014.zip
 
-      - name: Upload artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: chromeos-rammus-macmini2014
